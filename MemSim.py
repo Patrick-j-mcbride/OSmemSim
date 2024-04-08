@@ -31,7 +31,7 @@ class OutputBlock:
                     output += f"                {line}\n"
             else:
                 output += f"        {event[0]}\n"
-        return output
+        return output + "        "
 
     def __repr__(self):
         return self.__str__()
@@ -68,7 +68,7 @@ class SimulatePAG:
         top = sum([p.admission_time + p.lifetime - p.arrival_time for p in self.finished_processes])
         bottom = len(self.finished_processes)
         avg_turnaround_time = top / bottom
-        print(f"Average turnaround: {avg_turnaround_time:.2f} ({top}/{bottom})")
+        print(f"Average Turnaround Time: {avg_turnaround_time}")
         
     def free_memory(self, pid):
         for i in range(self.total_frames):
@@ -83,7 +83,7 @@ class SimulatePAG:
                 self.running_processes.remove(process)
                 self.finished_processes.append(process)
                 self.out.add_event(f"Process {process.pid} completes")
-                self.out.add_event("Memory Map:", self.get_mmap())
+                self.out.add_event("Memory Map: ", self.get_mmap())
 
     def update_input_queue(self):
         i = 0
@@ -103,7 +103,9 @@ class SimulatePAG:
         free_chunks = 0
         for i, pid in enumerate(self.memory_map):
             if free_chunks != 0 and pid is not None:
-                out_mmap.append(f"{(i-free_chunks)*self.page_size}-{(i-free_chunks+1)*self.page_size-1}: Free frame(s)")
+                start = (i-free_chunks)*self.page_size
+                end = (free_chunks*self.page_size)-1 + start
+                out_mmap.append(f"{start}-{end}: Free Frame(s)")
                 free_frames -= free_chunks
                 free_chunks = 0
             if pid is not None:
@@ -112,7 +114,7 @@ class SimulatePAG:
                 free_chunks += 1
             
         if free_frames > 0:
-            out_mmap.append(f"{self.total_frames*self.page_size - free_frames*self.page_size}-{self.total_frames*self.page_size-1}: Free frame(s)")
+            out_mmap.append(f"{self.total_frames*self.page_size - free_frames*self.page_size}-{self.total_frames*self.page_size-1}: Free Frame(s)")
         return out_mmap
 
     def get_input_queue(self):
@@ -132,9 +134,9 @@ class SimulatePAG:
                 process.admission_time = self.current_time
                 self.running_processes.append(process)
                 self.input_queue.remove(process)
-                self.out.add_event(f"MM moves process {process.pid} to memory")
+                self.out.add_event(f"MM moves Process {process.pid} to memory")
                 self.out.add_event(self.get_input_queue())
-                self.out.add_event("Memory Map:", self.get_mmap())
+                self.out.add_event("Memory Map: ", self.get_mmap())
             else:
                 i += 1
 
@@ -179,115 +181,6 @@ def get_config():
 
 def simulate_vsp(processes, memory_size, algorithm):
     pass
-
-def simulate_pag(processes, memory_size, page_size):
-    total_frames = memory_size // page_size
-    memory_map = [None] * total_frames  # None indicates a free frame
-    mmap_metadata = [None] * total_frames
-    current_time = 0
-    input_queue = []
-    running_processes = []
-    finished_processes = []
-
-    # Helper functions
-    def allocate_memory(process):
-        required_frames = (process.memory_requirements + page_size - 1) // page_size
-        free_frames = memory_map.count(None)
-        if free_frames < required_frames:
-            return False
-        allocated = 0
-        for i in range(total_frames):
-            if memory_map[i] is None:
-                allocated += 1
-                memory_map[i] = process.pid
-                mmap_metadata[i] = f"Process {process.pid}, Page {allocated}"
-                if allocated == required_frames:
-                    return True
-        return False
-
-    def free_memory(pid):
-        for i in range(total_frames):
-            if memory_map[i] == pid:
-                memory_map[i] = None
-                mmap_metadata[i] = None
-
-    def check_completions(time_block_output):
-
-        for process in list(running_processes):
-            if current_time >= process.admission_time + process.lifetime:
-                free_memory(process.pid)
-                running_processes.remove(process)
-                finished_processes.append(process)
-                time_block_output += f"\tProcess {process.pid} completes\n"
-                time_block_output = add_memory_map(time_block_output)
-        return time_block_output
-
-    def add_input_queue(output):
-        output += "\tInput Queue:["
-        for process in input_queue:
-            output += f"{process.pid} "
-        output += "]\n"
-        return output
-
-    def add_memory_map(output):
-        output += "\tMemory Map:\n"
-        free_frames = memory_map.count(None)
-        free_chunks = 0
-        for i, pid in enumerate(memory_map):
-            if free_chunks != 0 and pid is not None:
-                output += f"\t\t{(i-free_chunks)*page_size}-{(i-free_chunks+1)*page_size-1}: Free frame(s)\n"
-                free_frames -= free_chunks
-                free_chunks = 0
-            if pid is not None:
-                output += f"\t\t{i*page_size}-{(i+1)*page_size-1}: {mmap_metadata[i]}\n"
-            else:
-                free_chunks += 1
-            
-        if free_frames > 0:
-            output += f"\t\t{total_frames*page_size - free_frames*page_size}-{total_frames*page_size-1}: Free frame(s)\n"
-        return output
-
-    # Simulation loop
-    while processes or input_queue or running_processes:
-        time_block_output = ""
-        i = 0
-        time_block_output = check_completions(time_block_output=time_block_output)
-        while i < len(processes):
-            process = processes[i]
-            if process.arrival_time == current_time:
-                input_queue.append(process)
-                processes.remove(process)
-                time_block_output += f"\tProcess {process.pid} arrives\n"
-                time_block_output = add_input_queue(time_block_output)
-                time_block_output = add_memory_map(time_block_output)
-            else:
-                i += 1
-
-        i = 0
-        while i < len(input_queue):
-            process = input_queue[i]
-            if allocate_memory(process):
-                process.admission_time = current_time
-                running_processes.append(process)
-                input_queue.remove(process)
-                time_block_output += f"\tMM moves process {process.pid} to memory\n"
-                time_block_output = add_memory_map(time_block_output)
-            else:
-                i += 1
-        
-        if time_block_output != "":
-            print(f"t = {current_time}:")
-            print(time_block_output, end="")
-
-        if not processes and not input_queue and not running_processes:
-            break  # End of simulation
-        current_time += 1
-
-    # Calculate average turnaround time
-    top = sum([p.admission_time + p.lifetime - p.arrival_time for p in finished_processes]) 
-    bottom = len(finished_processes)
-    avg_turnaround_time = top / bottom
-    print(f"Average turnaround: {avg_turnaround_time:.2f} ({top}/{bottom})")
 
 def simulate_seg(processes, memory_size, algorithm):
     memory_map = [{'pid': None, 'start': 0, 'end': memory_size}]  # Initialize memory as entirely free
@@ -393,24 +286,20 @@ def simulate_seg(processes, memory_size, algorithm):
     average_turnaround_time = total_turnaround_time / len(processes) if processes else 0
     print(f"Average turnaround time: {average_turnaround_time:.2f}")
 
-
-
-
-
 def main():
     memory_size, policy, algorithm, page_size, filename = get_config()
     processes = read_workload_file(filename)
     if policy == 1:
         simulate_vsp(processes, memory_size, algorithm)
     elif policy == 2:
-        simulate_pag(processes, memory_size, page_size)
+        SimulatePAG(processes, memory_size, page_size)
     elif policy == 3:
         simulate_seg(processes, memory_size, algorithm)
     
 def test_main():
         processes = read_workload_file('input1.txt')
         memory_size = 2000
-        page_size = 100
+        page_size = 400
         SimulatePAG(processes, memory_size, page_size)
 
 if __name__ == "__main__":
