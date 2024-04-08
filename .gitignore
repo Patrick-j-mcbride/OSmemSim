@@ -1,2 +1,5 @@
 *.pdf
 data/
+local.txt
+.DS_Store
+*.txt
