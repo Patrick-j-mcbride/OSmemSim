@@ -1,3 +1,11 @@
+import sys
+import os
+import re
+
+def format_tat(tat):
+    return re.sub(r'\.(\d)0$', r'.\1', tat)
+    
+
 class Process:
     def __init__(self, pid, arrival_time, lifetime, memory_requirements):
         self.pid = pid
@@ -58,7 +66,7 @@ class SimulatePAG:
         self.simulate()
 
     def simulate(self):
-        while self.processes or self.input_queue or self.running_processes:
+        while (self.processes or self.input_queue or self.running_processes) and self.current_time < 100000:
             self.out = OutputBlock(self.current_time)
             self.update_completions()
             self.update_input_queue()
@@ -68,7 +76,7 @@ class SimulatePAG:
         top = sum([p.admission_time + p.lifetime - p.arrival_time for p in self.finished_processes])
         bottom = len(self.finished_processes)
         avg_turnaround_time = top / bottom
-        print(f"Average Turnaround Time: {avg_turnaround_time}")
+        print(format_tat(f"Average Turnaround Time: {avg_turnaround_time:.2f}"))
         
     def free_memory(self, pid):
         for i in range(self.total_frames):
@@ -77,23 +85,30 @@ class SimulatePAG:
                 self.mmap_metadata[i] = None
 
     def update_completions(self):
-        for process in list(self.running_processes):
-            if self.current_time >= process.admission_time + process.lifetime:
-                self.free_memory(process.pid)
-                self.running_processes.remove(process)
-                self.finished_processes.append(process)
-                self.out.add_event(f"Process {process.pid} completes")
+        i = 0
+        end = len(self.running_processes)
+        while i < end:
+            if self.current_time >= self.running_processes[i].admission_time + self.running_processes[i].lifetime:
+                self.free_memory(self.running_processes[i].pid)
+                self.out.add_event(f"Process {self.running_processes[i].pid} completes")
                 self.out.add_event("Memory Map: ", self.get_mmap())
+                self.finished_processes.append(self.running_processes[i])
+                self.running_processes.remove(self.running_processes[i])
+                end -= 1
+            else:
+                i += 1
 
     def update_input_queue(self):
         i = 0
-        while i < len(self.processes):
+        end = len(self.processes)
+        while i < end:
             process = self.processes[i]
             if process.arrival_time == self.current_time:
                 self.input_queue.append(process)
-                self.processes.remove(process)
                 self.out.add_event(f"Process {process.pid} arrives")
                 self.out.add_event(self.get_input_queue())
+                self.processes.remove(process)
+                end -= 1
             else:
                 i += 1
 
@@ -112,7 +127,6 @@ class SimulatePAG:
                 out_mmap.append(f"{i*self.page_size}-{(i+1)*self.page_size-1}: {self.mmap_metadata[i]}")
             else:
                 free_chunks += 1
-            
         if free_frames > 0:
             out_mmap.append(f"{self.total_frames*self.page_size - free_frames*self.page_size}-{self.total_frames*self.page_size-1}: Free Frame(s)")
         return out_mmap
@@ -128,7 +142,8 @@ class SimulatePAG:
     
     def update_queue(self):
         i = 0
-        while i < len(self.input_queue):
+        end = len(self.input_queue)
+        while i < end:
             process = self.input_queue[i]
             if self.allocate_memory(process):
                 process.admission_time = self.current_time
@@ -137,6 +152,7 @@ class SimulatePAG:
                 self.out.add_event(f"MM moves Process {process.pid} to memory")
                 self.out.add_event(self.get_input_queue())
                 self.out.add_event("Memory Map: ", self.get_mmap())
+                end -= 1
             else:
                 i += 1
 
@@ -154,6 +170,175 @@ class SimulatePAG:
                 if allocated == required_frames:
                     return True
         return False
+
+class SimulateVSP:
+    def __init__(self, processes, memory_size, algorithm):
+        self.processes = processes
+        self.memory_size = memory_size
+        self.algorithm = algorithm
+
+        self.memory_map = [{'pid': None, 'start': 0, 'end': memory_size-1}]  # Initialize memory as entirely free
+        self.current_time = 0
+        self.input_queue = []
+        self.running_processes = []
+        self.finished_processes = []
+        self.output_blocks = []
+        self.out = None
+        self.simulate()
+
+    def simulate(self):
+        while (self.processes or self.input_queue or self.running_processes) and self.current_time < 100000:
+            self.out = OutputBlock(self.current_time)
+            self.update_completions()
+            self.update_input_queue()
+            self.update_queue()
+            self.out.output_if_not_empty()
+            self.current_time += 1
+        top = sum([p.admission_time + p.lifetime - p.arrival_time for p in self.finished_processes])
+        bottom = len(self.finished_processes)
+        avg_turnaround_time = top / bottom
+        print(format_tat(f"Average Turnaround Time: {avg_turnaround_time:.2f}"))
+
+    def update_completions(self):
+        i = 0
+        end = len(self.running_processes)
+        while i < end:
+            if self.current_time >= self.running_processes[i].admission_time + self.running_processes[i].lifetime:
+                self.free_memory(self.running_processes[i].pid)
+                self.out.add_event(f"Process {self.running_processes[i].pid} completes")
+                self.out.add_event("Memory Map: ", self.get_mmap())
+                self.finished_processes.append(self.running_processes[i])
+                self.running_processes.remove(self.running_processes[i])
+                end -= 1
+            else:
+                i += 1
+
+    def update_input_queue(self):
+        i = 0
+        end = len(self.processes)
+        while i < end:
+            process = self.processes[i]
+            if process.arrival_time == self.current_time:
+                self.input_queue.append(process)
+                self.processes.remove(process)
+                self.out.add_event(f"Process {process.pid} arrives")
+                self.out.add_event(self.get_input_queue())
+                end -= 1
+            else:
+                i += 1
+
+    def get_input_queue(self):
+        out = "Input Queue:["
+        for process in self.input_queue:
+            out += f"{process.pid} "
+        if out[-1] == " ":
+            out = out[:-1]  # Remove the last space
+        out += "]"
+        return out
+
+    def free_memory(self, pid):
+        # Free memory occupied by the process's segments
+        for m in self.memory_map:
+            if m['pid'] == pid:
+                m['pid'] = None
+        self.merge_free_spaces()
+
+    def merge_free_spaces(self):
+        # Merges adjacent free spaces in the memory map
+        i = 0
+        end = len(self.memory_map) - 1
+        while i < end:
+            if self.memory_map[i]['pid'] is None and self.memory_map[i + 1]['pid'] is None:
+                self.memory_map[i]['end'] = self.memory_map[i + 1]['end']
+                del self.memory_map[i + 1]
+                end -= 1
+            else:
+                i += 1
+
+    def get_mmap(self):
+        out_mmap = []
+        self.sort_memory_map()
+        for m in self.memory_map:
+            if m['pid'] is None:
+                out_mmap.append(f"{m['start']}-{m['end']}: Hole")
+            else:
+                out_mmap.append(f"{m['start']}-{m['end']}: Process {m['pid']}")
+        return out_mmap
+    
+    def sort_memory_map(self):
+        self.memory_map.sort(key=lambda x: x['start'])
+
+    def update_queue(self):
+        i = 0
+        end = len(self.input_queue)
+        while i < end:
+            process = self.input_queue[i]
+            if self.allocate_memory(process):
+                process.admission_time = self.current_time
+                self.running_processes.append(process)
+                self.out.add_event(f"MM moves Process {process.pid} to memory")
+                self.input_queue.remove(process)
+                self.out.add_event(self.get_input_queue())
+                self.out.add_event("Memory Map: ", self.get_mmap())
+                end -= 1
+            else:
+                i += 1
+    
+    def allocate_memory(self, process):
+        if self.algorithm == 1: # First-fit, find the first hole that fits the process and allocate it. Then trim the hole and free the extra memory if necessary.
+            for m in self.memory_map:
+                if m['pid'] is None and (m['end'] - m['start']) > process.memory_requirements - 1:
+                    hole = {'pid': None, 'start': m['start'] + process.memory_requirements, 'end': m['end']}
+                    self.memory_map.append(hole)
+                    m['pid'] = process.pid
+                    m['end'] = m['start'] + process.memory_requirements - 1
+                    return True
+                elif m['pid'] is None and (m['end'] - m['start']) == process.memory_requirements -1:
+                    m['pid'] = process.pid
+                    return True
+            return False
+        elif self.algorithm == 2: # Best-fit, find the smallest hole that fits the process and allocate it. Then trim the hole and free the extra memory if necessary.
+            holes = [] # [size, index]
+            i = 0
+            for m in self.memory_map:
+                if m['pid'] is None and (m['end'] - m['start']) >= process.memory_requirements - 1:
+                    holes.append([(m['end'] - m['start']), i])
+                i += 1
+            if holes:
+                holes.sort(key=lambda x: x[1])
+                holes.sort(key=lambda x: x[0])
+                best_hole = self.memory_map[holes[0][1]]
+                if (best_hole['end'] - best_hole['start']) > process.memory_requirements - 1:
+                    hole = {'pid': None, 'start': best_hole['start'] + process.memory_requirements, 'end': best_hole['end']}
+                    self.memory_map.append(hole)
+                    self.memory_map[holes[0][1]]['pid'] = process.pid
+                    self.memory_map[holes[0][1]]['end'] = best_hole['start'] + process.memory_requirements - 1
+                    return True
+                elif (best_hole['end'] - best_hole['start']) == process.memory_requirements - 1:
+                    self.memory_map[holes[0][1]]['pid'] = process.pid
+                    return True
+            return False
+        elif self.algorithm == 3: # Worst-fit, find the largest hole that fits the process and allocate it. Then trim the hole and free the extra memory if necessary.
+            holes = [] # [size, index]
+            i = 0
+            for m in self.memory_map:
+                if m['pid'] is None and (m['end'] - m['start']) >= process.memory_requirements - 1:
+                    holes.append([(m['end'] - m['start']), i])
+                i += 1
+            if holes:
+                holes.sort(key=lambda x: x[1])
+                holes.sort(key=lambda x: x[0], reverse=True)
+                best_hole = self.memory_map[holes[0][1]]
+                if (best_hole['end'] - best_hole['start']) > process.memory_requirements - 1:
+                    hole = {'pid': None, 'start': best_hole['start'] + process.memory_requirements, 'end': best_hole['end']}
+                    self.memory_map.append(hole)
+                    self.memory_map[holes[0][1]]['pid'] = process.pid
+                    self.memory_map[holes[0][1]]['end'] = best_hole['start'] + process.memory_requirements - 1
+                    return True
+                elif (best_hole['end'] - best_hole['start']) == process.memory_requirements - 1:
+                    self.memory_map[holes[0][1]]['pid'] = process.pid
+                    return True
+            return False
 
 def read_workload_file(filename):
     processes = []
@@ -178,9 +363,6 @@ def get_config():
         algorithm = None
     filename = input("Enter the name of the workload file: ")
     return memory_size, policy, algorithm, page_size, filename
-
-def simulate_vsp(processes, memory_size, algorithm):
-    pass
 
 def simulate_seg(processes, memory_size, algorithm):
     memory_map = [{'pid': None, 'start': 0, 'end': memory_size}]  # Initialize memory as entirely free
@@ -290,18 +472,30 @@ def main():
     memory_size, policy, algorithm, page_size, filename = get_config()
     processes = read_workload_file(filename)
     if policy == 1:
-        simulate_vsp(processes, memory_size, algorithm)
+        SimulateVSP(processes, memory_size, algorithm)
     elif policy == 2:
         SimulatePAG(processes, memory_size, page_size)
     elif policy == 3:
         simulate_seg(processes, memory_size, algorithm)
     
-def test_main():
-        processes = read_workload_file('input1.txt')
-        memory_size = 2000
-        page_size = 400
-        SimulatePAG(processes, memory_size, page_size)
+def test_main(folder, memory_size, policy, algorithm, page_size):
+        # append the filename to the current working directory
+        path = os.getcwd() + "/data/" + folder + "/input.txt"
+        processes = read_workload_file(filename=path)
+        if policy == 1:
+            SimulateVSP(processes, memory_size, algorithm)
+        elif policy == 2:
+            SimulatePAG(processes, memory_size, page_size)
+        elif policy == 3:
+            simulate_seg(processes, memory_size, algorithm)
 
 if __name__ == "__main__":
-    #main()
-    test_main()
+    if len(sys.argv) > 1:
+        folder = sys.argv[1]
+        memory_size = int(sys.argv[2])
+        policy = int(sys.argv[3])
+        algorithm = int(sys.argv[4])
+        page_size = int(sys.argv[5])
+        test_main(folder, memory_size, policy, algorithm, page_size)
+    else:
+        main()
